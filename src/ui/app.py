@@ -1,8 +1,9 @@
+import os
 import threading
 import webbrowser
 
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from src.core import pip_wrapper, pypi
 
@@ -14,27 +15,40 @@ class PipManagerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Менеджер pip-пакетов")
-        self.root.geometry("780x560")
+        self.root.geometry("820x560")
 
         self.descriptions = pypi.DescriptionService()
         self.packages = []
+        self.outdated = {}
         self.row_packages = {}
         self.name_to_iid = {}
         self.checked = set()
         self._click_timer = None
+        self.python = sys.executable if "sys" in globals() else None
+        if self.python is None:
+            import sys as _sys
+            self.python = _sys.executable
 
         self._build_ui()
         self.refresh()
 
     def _build_ui(self):
-        env = pip_wrapper.get_environment_info()
+        env = pip_wrapper.get_environment_info(self.python)
         env_text = (
             f"Python {env['version']}  |  "
             f"{'venv' if env['is_venv'] else 'системный'}  |  {env['executable']}"
         )
         env_frame = ttk.Frame(self.root)
         env_frame.pack(fill=tk.X, padx=8, pady=(8, 0))
+
         ttk.Label(env_frame, text=env_text, foreground="#555").pack(side=tk.LEFT)
+
+        ttk.Label(env_frame, text="Окружение:").pack(side=tk.LEFT, padx=(12, 0))
+        self.python_var = tk.StringVar(value=self.python)
+        self.python_combo = ttk.Combobox(env_frame, textvariable=self.python_var, width=50, state="readonly")
+        self.python_combo.pack(side=tk.LEFT, padx=6)
+        self.python_combo.bind("<<ComboboxSelected>>", lambda _: self._on_python_changed())
+        ttk.Button(env_frame, text="Обновить окружение", command=self._reload_pythons).pack(side=tk.LEFT, padx=6)
 
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill=tk.X, padx=8, pady=8)
@@ -42,8 +56,9 @@ class PipManagerApp:
         ttk.Button(toolbar, text="Обновить", command=self.refresh).pack(side=tk.LEFT)
         ttk.Button(toolbar, text="Удалить выбранные", command=self.uninstall_selected).pack(side=tk.LEFT, padx=6)
         ttk.Button(toolbar, text="Удалить все", command=self.uninstall_all).pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="Выбрать всё", command=self._select_all_visible).pack(side=tk.LEFT, padx=(12, 0))
-        ttk.Button(toolbar, text="Снять выбор", command=self._clear_selection).pack(side=tk.LEFT, padx=6)
+        ttk.Button(toolbar, text="Обновить выбранные", command=self.update_selected).pack(side=tk.LEFT, padx=6)
+        ttk.Button(toolbar, text="Обновить все", command=self.update_all).pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="Экспорт requirements", command=self.export_requirements).pack(side=tk.LEFT, padx=6)
 
         self.status = tk.StringVar(value="Готово")
         ttk.Label(toolbar, textvariable=self.status).pack(side=tk.RIGHT)
@@ -60,6 +75,13 @@ class PipManagerApp:
         self.only_groups_var = tk.BooleanVar(value=False)
         self.only_groups_var.trace_add("write", lambda *_: self._apply_filter())
         ttk.Checkbutton(options, text="Только группы (>1 пакета)", variable=self.only_groups_var).pack(side=tk.LEFT)
+
+        install_frame = ttk.Frame(self.root)
+        install_frame.pack(fill=tk.X, padx=8, pady=(6, 0))
+        ttk.Label(install_frame, text="Установить:").pack(side=tk.LEFT)
+        self.install_var = tk.StringVar()
+        ttk.Entry(install_frame, textvariable=self.install_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Button(install_frame, text="Установить", command=self.install_selected).pack(side=tk.LEFT)
 
         body = ttk.Frame(self.root)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -99,13 +121,30 @@ class PipManagerApp:
         self.tree.bind("<Delete>", lambda _: self.uninstall_selected())
         self.tree.bind("<Control-a>", lambda _: self._select_all_visible())
 
+    def _reload_pythons(self):
+        interpreters = pip_wrapper.find_python_interpreters()
+        current = self.python_var.get()
+        self.python_combo["values"] = interpreters
+        if interpreters:
+            if current not in interpreters:
+                current = interpreters[0]
+            self.python_var.set(current)
+            self.python = current
+        self.refresh()
+
+    def _on_python_changed(self):
+        self.python = self.python_var.get()
+        self.refresh()
+
     def refresh(self):
         self.status.set("Загрузка списка...")
+        self.progress.config(value=0)
         self.root.update_idletasks()
 
         def work():
             try:
-                self.packages = pip_wrapper.get_installed_packages()
+                self.packages = pip_wrapper.get_installed_packages(self.python)
+                self.outdated = pip_wrapper.get_outdated(self.python)
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
                 self.root.after(0, lambda: self.status.set("Ошибка"))
@@ -145,8 +184,11 @@ class PipManagerApp:
             for pkg in tree_families[fam]:
                 name = pkg["name"]
                 mark = CHECKED if name in self.checked else UNCHECKED
+                version = pkg["version"]
+                if name in self.outdated and self.outdated[name]:
+                    version = f"{version} → {self.outdated[name]}"
                 iid = self.tree.insert("", tk.END, values=(
-                    mark, name, pkg["version"], self.descriptions.get(name),
+                    mark, name, version, self.descriptions.get(name),
                 ))
                 self.row_packages[iid] = [name]
                 self.name_to_iid[name] = iid
@@ -202,13 +244,13 @@ class PipManagerApp:
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()
 
     def _load_description(self, name):
-        text = self.descriptions.fetch_full(name)
-        self.root.after(0, lambda: self._description_window(name, text))
+        info = self.descriptions.get_info(name)
+        self.root.after(0, lambda: self._description_window(name, info))
 
-    def _description_window(self, name, text):
+    def _description_window(self, name, info):
         win = tk.Toplevel(self.root)
         win.title(f"{name} — описание (PyPI)")
-        win.geometry("600x420")
+        win.geometry("640x520")
         win.transient(self.root)
 
         url = f"https://pypi.org/project/{name}/"
@@ -216,7 +258,27 @@ class PipManagerApp:
 
         body = scrolledtext.ScrolledText(win, wrap=tk.WORD)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        body.insert(tk.END, text or "(нет описания)")
+
+        def insert_section(title, text):
+            if not text:
+                return
+            body.insert(tk.END, title + "\n", "section")
+            body.insert(tk.END, text + "\n\n")
+
+        body.tag_configure("section", font=(body.cget("font"), 10, "bold"))
+
+        insert_section("Описание", info.get("summary", ""))
+        insert_section("Лицензия", info.get("license", ""))
+        insert_section("Домашняя страница", info.get("home_page", ""))
+        requires = info.get("requires_dist") or []
+        if requires:
+            insert_section("Зависимости", "\n".join(requires[:50]))
+        project_urls = info.get("project_urls") or {}
+        if project_urls:
+            urls = "\n".join(f"{k}: {v}" for k, v in project_urls.items())
+            insert_section("Ссылки", urls)
+        insert_section("Полное описание", info.get("description", ""))
+
         body.configure(state=tk.DISABLED)
 
         ttk.Button(win, text="Открыть на PyPI", command=lambda: webbrowser.open(url)).pack(pady=(0, 8))
@@ -268,36 +330,65 @@ class PipManagerApp:
         self.checked.clear()
         self._render_checks()
 
-    def uninstall_selected(self):
-        names = self._selected_names()
+    def _run_task(self, title, names, worker):
         if not names:
-            messagebox.showinfo("Удаление", "Отметьте пакеты для удаления (чекбокс слева).")
+            messagebox.showinfo(title, "Сначала выберите пакеты.")
             return
-        if not messagebox.askyesno("Подтверждение", f"Удалить {len(names)} пакет(ов)?\n" + ", ".join(names[:10]) + ("..." if len(names) > 10 else "")):
+        if not messagebox.askyesno("Подтверждение", f"{title}: {len(names)} пакет(ов)?\n" + ", ".join(names[:10]) + ("..." if len(names) > 10 else "")):
             return
-        self._run_uninstall(names)
-
-    def uninstall_all(self):
-        names = [p["name"] for p in self.packages]
-        if not names:
-            return
-        if not messagebox.askyesno("Подтверждение", f"Удалить ВСЕ пакеты ({len(names)})? Действие необратимо!"):
-            return
-        self._run_uninstall(names)
-
-    def _run_uninstall(self, names):
-        self.status.set("Удаление...")
+        self.status.set(f"{title}...")
+        self.progress.config(value=0)
         self.root.update_idletasks()
 
         def work():
-            ok, output = pip_wrapper.uninstall_packages(names)
-            self.root.after(0, lambda: self._on_done(ok, output))
+            ok, output = worker(names)
+            self.root.after(0, lambda: self._on_done(ok, output, title))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_done(self, ok, output):
+    def uninstall_selected(self):
+        self._run_task("Удаление", self._selected_names(), lambda ns: pip_wrapper.uninstall_packages(ns, self.python))
+
+    def uninstall_all(self):
+        names = [p["name"] for p in self.packages]
+        self._run_task("Удаление всех", names, lambda ns: pip_wrapper.uninstall_packages(ns, self.python))
+
+    def update_selected(self):
+        names = [n for n in self._selected_names() if n in self.outdated]
+        self._run_task("Обновление", names, lambda ns: pip_wrapper.update_packages(ns, self.python))
+
+    def update_all(self):
+        names = list(self.outdated.keys())
+        self._run_task("Обновление всех", names, lambda ns: pip_wrapper.update_packages(ns, self.python))
+
+    def install_selected(self):
+        spec = self.install_var.get().strip()
+        if not spec:
+            messagebox.showinfo("Установка", "Введите имя пакета для установки.")
+            return
+        self._run_task("Установка", [spec], lambda ns: pip_wrapper.install_packages(ns, self.python))
+        self.install_var.set("")
+
+    def export_requirements(self):
+        if not self.packages:
+            messagebox.showinfo("Экспорт", "Список пакетов пуст.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile="requirements.txt",
+        )
+        if not path:
+            return
+        ok, out = pip_wrapper.export_requirements(self.packages, path)
         if ok:
-            messagebox.showinfo("Готово", "Операция завершена.")
+            messagebox.showinfo("Экспорт", f"requirements.txt сохранён:\n{out}")
+        else:
+            messagebox.showerror("Ошибка", str(out))
+
+    def _on_done(self, ok, output, title):
+        if ok:
+            messagebox.showinfo("Готово", f"{title} завершено.")
         else:
             messagebox.showerror("Ошибка", output)
         self.refresh()

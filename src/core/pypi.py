@@ -34,15 +34,27 @@ class DescriptionService:
             return self._full_cache.get(name, "")
 
     def fetch_full(self, name):
+        return self.get_info(name).get("description", "")
+
+    def get_info(self, name):
         with self._lock:
-            if name in self._full_cache:
-                return self._full_cache[name]
+            cached = self._full_cache.get(name + "__info")
+            if cached is not None:
+                return cached
         try:
             with urllib.request.urlopen(PYPI_URL.format(name), timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            description = (data.get("info", {}) or {}).get("description", "") or ""
+            info = data.get("info", {}) or {}
+            result = {
+                "summary": info.get("summary", "") or "",
+                "description": info.get("description", "") or "",
+                "home_page": info.get("home_page", "") or "",
+                "license": info.get("license", "") or "",
+                "requires_dist": info.get("requires_dist") or [],
+                "project_urls": info.get("project_urls") or {},
+            }
         except Exception:
-            description = ""
+            result = {"summary": "", "description": "", "home_page": "", "license": "", "requires_dist": [], "project_urls": {}}
         with self._lock:
-            self._full_cache[name] = description
-        return description
+            self._full_cache[name + "__info"] = result
+        return result
