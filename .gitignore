@@ -13,8 +13,12 @@ ENV/
 # Packaging / build / distribution
 dist/
 build/
+release/
 *.egg-info/
 *.egg
+
+# Compiled installers (attach to GitHub Releases instead of committing)
+*.exe
 
 # Test / coverage reports
 .pytest_cache/
