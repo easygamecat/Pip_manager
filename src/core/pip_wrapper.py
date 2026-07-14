@@ -58,9 +58,17 @@ def get_outdated(python=None):
     return outdated
 
 
-def search_pypi(query):
-    svc = pypi.DescriptionService()
-    return svc.search(query)
+_pypi_service = None
+
+
+def search_pypi(query, service=None):
+    global _pypi_service
+    if service is None:
+        if _pypi_service is None:
+            from . import pypi as _pypi_module
+            _pypi_service = _pypi_module.DescriptionService()
+        service = _pypi_service
+    return service.search(query)
 
 
 def get_environment_info(python=None):

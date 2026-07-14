@@ -10,8 +10,6 @@ logger = logging.getLogger(__name__)
 PYPI_URL = "https://pypi.org/pypi/{}/json"
 PYPI_SIMPLE = "https://pypi.org/simple/"
 
-logger = logging.getLogger(__name__)
-
 
 class DescriptionService:
     def __init__(self):
@@ -27,8 +25,8 @@ class DescriptionService:
     def _start_popular_load(self):
         def load():
             try:
-                url = PYPI_SIMPLE
-                with urllib.request.urlopen(url, timeout=10) as resp:
+                req = urllib.request.Request(PYPI_SIMPLE, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
                     html = resp.read().decode("utf-8", errors="ignore")
                 matches = re.findall(r'href="/simple/([^/]+)/"', html)
                 seen = set()
@@ -49,17 +47,6 @@ class DescriptionService:
 
         threading.Thread(target=load, daemon=True).start()
 
-PYPI_URL = "https://pypi.org/pypi/{}/json"
-
-
-class DescriptionService:
-    def __init__(self):
-        self._cache = {}
-        self._full_cache = {}
-        self._lock = threading.Lock()
-        self._search_cache = {}
-        self._search_lock = threading.Lock()
-
     def get(self, name):
         with self._lock:
             return self._cache.get(name, "")
@@ -69,7 +56,8 @@ class DescriptionService:
             if name in self._cache:
                 return self._cache[name]
         try:
-            with urllib.request.urlopen(PYPI_URL.format(name), timeout=8) as resp:
+            req = urllib.request.Request(PYPI_URL.format(name), headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             summary = (data.get("info", {}) or {}).get("summary", "") or ""
         except Exception:
@@ -91,7 +79,8 @@ class DescriptionService:
             if cached is not None:
                 return cached
         try:
-            with urllib.request.urlopen(PYPI_URL.format(name), timeout=8) as resp:
+            req = urllib.request.Request(PYPI_URL.format(name), headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             info = data.get("info", {}) or {}
             result = {
@@ -113,15 +102,15 @@ class DescriptionService:
         query = (query or "").strip()
         if len(query) < 2:
             return []
+        qlow = query.lower()
         with self._search_lock:
-            cached = self._search_cache.get(query)
+            cached = self._search_cache.get(qlow)
             if cached is not None:
                 return cached
         result = []
-        qlow = query.lower()
         try:
-            url = f"https://pypi.org/simple/?q={urllib.parse.quote(query)}"
-            with urllib.request.urlopen(url, timeout=8) as resp:
+            req = urllib.request.Request(f"https://pypi.org/simple/?q={urllib.parse.quote(query)}", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
             matches = re.findall(r'href="/simple/([^/]+)/"', html)
             seen = set()
@@ -138,8 +127,7 @@ class DescriptionService:
             logger.debug("search failed for %s: %s", query, e)
         if not result:
             with self._search_lock:
-                self._popular_cache = self._popular_cache or []
-            pop = self._popular_cache
+                pop = list(self._popular_cache)
             seen = set()
             for m in pop:
                 low = m.lower()
@@ -150,6 +138,7 @@ class DescriptionService:
                     result.append(m)
                     if len(result) >= 30:
                         break
-        with self._search_lock:
-            self._search_cache[query] = result
+        if result:
+            with self._search_lock:
+                self._search_cache[qlow] = result
         return result

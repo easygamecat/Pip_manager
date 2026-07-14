@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import threading
@@ -8,6 +9,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from src.core import pip_wrapper, pypi
+
+logger = logging.getLogger(__name__)
 
 CHECKED = "☑"
 UNCHECKED = "☐"
@@ -92,9 +95,8 @@ class PipManagerApp:
         self.install_combo.set("Введите имя пакета...")
         self.install_combo.bind("<FocusIn>", lambda _: self._clear_install_placeholder())
         self.install_combo.bind("<FocusOut>", lambda _: self._restore_install_placeholder())
-        self.install_combo.bind("<KeyRelease>", self._on_install_type)
-        self._install_after = None
         ttk.Button(install_frame, text="Установить", command=self.install_selected).pack(side=tk.LEFT)
+        ttk.Button(install_frame, text="На PyPI", command=self._open_install_pypi).pack(side=tk.LEFT, padx=6)
         self.strict_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(install_frame, text="Строгое соответствие", variable=self.strict_var).pack(side=tk.LEFT, padx=6)
 
@@ -398,42 +400,6 @@ class PipManagerApp:
         if not self.install_var.get().strip():
             self.install_var.set("Введите имя пакета...")
 
-    def _on_install_type(self, event):
-        if self._install_after:
-            self.root.after_cancel(self._install_after)
-        self._install_after = self.root.after(350, lambda: self._do_install_suggest())
-
-    def _do_install_suggest(self):
-        self._install_after = None
-        query = self.install_var.get().strip()
-        if not query or query == "Введите имя пакета...":
-            self.install_combo["values"] = []
-            return
-        if len(query) < 2:
-            self.install_combo["values"] = []
-            return
-        self._search_id = getattr(self, "_search_id", 0) + 1
-        search_id = self._search_id
-        self.install_combo["values"] = ["Поиск..."]
-        def work():
-            local = [p["name"] for p in self.packages if self._match(query, p["name"])]
-            remote = pip_wrapper.search_pypi(query)
-            remote_filtered = [r for r in remote if self._match(query, r)]
-            merged = []
-            seen = set()
-            for m in remote_filtered + local:
-                if m.lower() not in seen:
-                    seen.add(m.lower())
-                    merged.append(m)
-            if search_id == self._search_id:
-                self.root.after(0, lambda: self.install_combo.configure(values=merged[:25] if merged else ["Ничего не найдено"]))
-        threading.Thread(target=work, daemon=True).start()
-
-    def _match(self, query, name):
-        if self.strict_var.get():
-            return query == name
-        return query.lower() in name.lower()
-
     def _open_pypi(self, name):
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()
 
@@ -536,7 +502,7 @@ class PipManagerApp:
 
         def work():
             ok, output = worker(names)
-            self.root.after(0, lambda: self._on_done(ok, output, title))
+            self.root.after(0, lambda: self._on_done(ok, output, title, names))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -590,9 +556,26 @@ class PipManagerApp:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть лог:\n{e}")
 
-    def _on_done(self, ok, output, title):
+    def _on_done(self, ok, output, title, updated_names=None):
         if ok:
             messagebox.showinfo("Готово", f"{title} завершено.")
         else:
             messagebox.showerror("Ошибка", output)
-        self.refresh()
+        if updated_names and any(n.lower() == "pip" for n in updated_names):
+            self.root.after(1500, lambda: self._recheck_pip_outdated())
+        else:
+            self.refresh()
+
+    def _recheck_pip_outdated(self, attempt=1):
+        if attempt > 5:
+            self.refresh()
+            return
+        try:
+            outdated = pip_wrapper.get_outdated(self.python)
+            if "pip" not in outdated:
+                self.outdated = outdated
+                self._apply_filter()
+                return
+        except Exception:
+            pass
+        self.root.after(1500, lambda: self._recheck_pip_outdated(attempt + 1))
