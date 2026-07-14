@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 PYPI_URL = "https://pypi.org/pypi/{}/json"
 PYPI_SIMPLE = "https://pypi.org/simple/"
 
+_pypi_opener = urllib.request.build_opener(urllib.request.HTTPHandler())
+_pypi_opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+
 
 class DescriptionService:
     def __init__(self):
@@ -26,7 +29,7 @@ class DescriptionService:
         def load():
             try:
                 req = urllib.request.Request(PYPI_SIMPLE, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with _pypi_opener.open(req, timeout=10) as resp:
                     html = resp.read().decode("utf-8", errors="ignore")
                 matches = re.findall(r'href="/simple/([^/]+)/"', html)
                 seen = set()
@@ -57,7 +60,7 @@ class DescriptionService:
                 return self._cache[name]
         try:
             req = urllib.request.Request(PYPI_URL.format(name), headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with _pypi_opener.open(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             summary = (data.get("info", {}) or {}).get("summary", "") or ""
         except Exception:
@@ -80,7 +83,7 @@ class DescriptionService:
                 return cached
         try:
             req = urllib.request.Request(PYPI_URL.format(name), headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with _pypi_opener.open(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             info = data.get("info", {}) or {}
             result = {
@@ -110,7 +113,7 @@ class DescriptionService:
         result = []
         try:
             req = urllib.request.Request(f"https://pypi.org/simple/?q={urllib.parse.quote(query)}", headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with _pypi_opener.open(req, timeout=8) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
             matches = re.findall(r'href="/simple/([^/]+)/"', html)
             seen = set()

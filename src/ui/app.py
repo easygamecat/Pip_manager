@@ -213,7 +213,8 @@ class PipManagerApp:
                     current = done
                 self.root.after(0, lambda c=current: self.status.set(f"Описаний: {c}/{total}"))
                 self.root.after(0, lambda c=current: self.progress.config(value=c))
-                self.root.after(0, self._refresh_descriptions)
+                if current % 8 == 0 or current == total:
+                    self.root.after(0, self._refresh_descriptions)
 
         self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
         threads = [threading.Thread(target=worker, args=(n,), daemon=True) for n in names]
@@ -223,6 +224,7 @@ class PipManagerApp:
             t.join()
         self.root.after(0, lambda: self.progress.config(value=total))
         self.root.after(0, lambda: self.status.set(f"Пакетов: {len(self.packages)}"))
+        self.root.after(0, self._refresh_descriptions)
 
     def _apply_filter(self, *_):
         pattern = self.filter_var.get().strip().lower()

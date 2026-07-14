@@ -203,12 +203,12 @@ class TestDescriptionService(unittest.TestCase):
         assert len(result) <= 30
 
     def test_popular_load_event(self):
-        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+        with mock.patch("src.core.pypi._pypi_opener.open") as mock_open:
             mock_resp = mock.Mock()
             mock_resp.read.return_value = b'<a href="/simple/pytest/">pytest</a>'
             mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
             mock_resp.__exit__ = mock.Mock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            mock_open.return_value = mock_resp
             svc = pypi.DescriptionService()
             assert svc._popular_loaded.wait(timeout=5)
             assert len(svc._popular_cache) > 0
