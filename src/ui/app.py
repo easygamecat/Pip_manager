@@ -91,13 +91,16 @@ class PipManagerApp:
             show="headings", selectmode="extended",
         )
         self.tree.heading("sel", text="✓")
-        self.tree.heading("name", text="Пакет")
-        self.tree.heading("version", text="Версия")
-        self.tree.heading("desc", text="Описание")
+        self.tree.heading("name", text="Пакет", command=lambda: self._on_sort("name"))
+        self.tree.heading("version", text="Версия", command=lambda: self._on_sort("version"))
+        self.tree.heading("desc", text="Описание", command=lambda: self._on_sort("desc"))
         self.tree.column("sel", width=30, anchor=tk.CENTER, stretch=False)
         self.tree.column("name", width=200, stretch=False)
         self.tree.column("version", width=90, stretch=False)
         self.tree.column("desc", stretch=True)
+        self.tree.tag_configure("outdated", foreground="#c00000")
+        self._last_sort_column = None
+        self._last_sort_reverse = False
 
         tree_scroll = ttk.Scrollbar(body, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=tree_scroll.set)
@@ -189,13 +192,45 @@ class PipManagerApp:
                     version = f"{version} → {self.outdated[name]}"
                 iid = self.tree.insert("", tk.END, values=(
                     mark, name, version, self.descriptions.get(name),
-                ))
+                ), tags=("outdated",) if (name in self.outdated and self.outdated[name]) else ())
                 self.row_packages[iid] = [name]
                 self.name_to_iid[name] = iid
                 iids.append(iid)
             self.family_iids[fam] = iids
 
         self.status.set(f"Пакетов: {len(self.packages)}  |  групп >1: {len(multi_families)}  |  показано: {len(self.tree.get_children())}")
+
+    def _on_sort(self, column):
+        if self._last_sort_column == column:
+            self._last_sort_reverse = not self._last_sort_reverse
+        else:
+            self._last_sort_column = column
+            self._last_sort_reverse = False
+        self._apply_sort()
+        self._apply_filter()
+
+    def _apply_sort(self):
+        if not self._last_sort_column:
+            return
+        column = self._last_sort_column
+        reverse = self._last_sort_reverse
+        items = []
+        for iid in self.tree.get_children():
+            values = self.tree.item(iid, "values")
+            tags = self.tree.item(iid, "tags")
+            name = values[1]
+            items.append((iid, values, tags))
+        col_index = {"sel": 0, "name": 1, "version": 2, "desc": 3}[column]
+
+        def sort_key(item):
+            val = item[1][col_index]
+            if column == "version":
+                return (0, val)
+            return (0, str(val).lower())
+
+        items.sort(key=sort_key, reverse=reverse)
+        for idx, (iid, values, tags) in enumerate(items):
+            self.tree.move(iid, "", idx)
 
     def _on_group_select(self, *_):
         sel = self.group_list.curselection()
