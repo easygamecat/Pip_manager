@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import webbrowser
 
@@ -24,10 +25,7 @@ class PipManagerApp:
         self.name_to_iid = {}
         self.checked = set()
         self._click_timer = None
-        self.python = sys.executable if "sys" in globals() else None
-        if self.python is None:
-            import sys as _sys
-            self.python = _sys.executable
+        self.python = sys.executable
 
         self._build_ui()
         self.refresh()
@@ -80,8 +78,11 @@ class PipManagerApp:
         install_frame.pack(fill=tk.X, padx=8, pady=(6, 0))
         ttk.Label(install_frame, text="Установить:").pack(side=tk.LEFT)
         self.install_var = tk.StringVar()
-        ttk.Entry(install_frame, textvariable=self.install_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self.install_combo = ttk.Combobox(install_frame, textvariable=self.install_var)
+        self.install_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self.install_combo.bind("<KeyRelease>", self._on_install_type)
         ttk.Button(install_frame, text="Установить", command=self.install_selected).pack(side=tk.LEFT)
+        ttk.Button(install_frame, text="Поиск на PyPI", command=self._search_pypi_dialog).pack(side=tk.LEFT, padx=6)
 
         body = ttk.Frame(self.root)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -107,15 +108,35 @@ class PipManagerApp:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tree_scroll.pack(side=tk.LEFT, fill=tk.Y)
 
-        right = ttk.Frame(body, width=210)
+        right = ttk.Frame(body, width=320)
         right.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
-        ttk.Label(right, text="Группы (>1 пакета)").pack(anchor=tk.W)
-        self.group_list = tk.Listbox(right)
-        group_scroll = ttk.Scrollbar(right, orient=tk.VERTICAL, command=self.group_list.yview)
+
+        group_container = ttk.Frame(right)
+        group_container.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(group_container, text="Группы (>1 пакета)").pack(anchor=tk.W)
+        self.group_list = tk.Listbox(group_container)
+        group_scroll = ttk.Scrollbar(group_container, orient=tk.VERTICAL, command=self.group_list.yview)
         self.group_list.configure(yscrollcommand=group_scroll.set)
         self.group_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         group_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.group_list.bind("<<ListboxSelect>>", self._on_group_select)
+
+        details_frame = ttk.LabelFrame(right, text="Детали пакета")
+        details_frame.pack(fill=tk.X, pady=(6, 0))
+        self.details_name = tk.StringVar(value="(не выбран)")
+        self.details_version = tk.StringVar(value="")
+        ttk.Label(details_frame, textvariable=self.details_name, font=(None, 10, "bold")).pack(anchor=tk.W, padx=6, pady=(6, 0))
+        ttk.Label(details_frame, textvariable=self.details_version).pack(anchor=tk.W, padx=6)
+        self.details_desc = tk.StringVar(value="")
+        ttk.Label(details_frame, textvariable=self.details_desc, wraplength=280, justify=tk.LEFT).pack(anchor=tk.W, padx=6, pady=(4, 0), fill=tk.X)
+        actions = ttk.Frame(details_frame)
+        actions.pack(fill=tk.X, padx=6, pady=6)
+        ttk.Button(actions, text="Обновить", command=self._update_current).pack(side=tk.LEFT)
+        ttk.Button(actions, text="Удалить", command=self._uninstall_current).pack(side=tk.LEFT, padx=6)
+        ttk.Button(actions, text="На PyPI", command=self._open_current_pypi).pack(side=tk.LEFT)
+
+        self.current_name = None
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
         self.family_iids = {}
 
@@ -274,8 +295,118 @@ class PipManagerApp:
         if iid:
             self.tree.set(iid, "sel", CHECKED if name in self.checked else UNCHECKED)
 
+    def _on_tree_select(self, _):
+        selected = self.tree.selection()
+        if not selected:
+            self.current_name = None
+            self.details_name.set("(не выбран)")
+            self.details_version.set("")
+            self.details_desc.set("")
+            return
+        iid = selected[0]
+        values = self.tree.item(iid, "values")
+        if len(values) < 2:
+            return
+        name = values[1]
+        self.current_name = name
+        self.details_name.set(name)
+        self.details_version.set(values[2])
+        self.details_desc.set(self.descriptions.get(name) or values[3] if len(values) > 3 else "")
+
+    def _update_current(self):
+        if not self.current_name:
+            messagebox.showinfo("Обновление", "Сначала выберите пакет.")
+            return
+        if self.current_name not in self.outdated:
+            messagebox.showinfo("Обновление", f"{self.current_name} уже актуальный.")
+            return
+        self._run_task("Обновление", [self.current_name], lambda ns: pip_wrapper.update_packages(ns, self.python))
+
+    def _uninstall_current(self):
+        if not self.current_name:
+            messagebox.showinfo("Удаление", "Сначала выберите пакет.")
+            return
+        self._run_task("Удаление", [self.current_name], lambda ns: pip_wrapper.uninstall_packages(ns, self.python))
+
+    def _open_current_pypi(self):
+        if not self.current_name:
+            return
+        webbrowser.open(f"https://pypi.org/project/{self.current_name}/")
+
+    def _on_install_type(self, event):
+        query = self.install_var.get().strip()
+        if len(query) < 2:
+            self.install_combo["values"] = []
+            return
+        matches = [p["name"] for p in self.packages if query.lower() in p["name"].lower()]
+        try:
+            import urllib.request
+            url = f"https://pypi.org/pypi/{query}/json"
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                import json
+                json.loads(resp.read().decode("utf-8"))
+            if query not in matches:
+                matches.insert(0, query)
+        except Exception:
+            pass
+        self.install_combo["values"] = matches[:20]
+
+    def _search_pypi_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("Поиск пакетов на PyPI")
+        win.geometry("520x420")
+        win.transient(self.root)
+
+        search_frame = ttk.Frame(win)
+        search_frame.pack(fill=tk.X, padx=8, pady=8)
+        ttk.Label(search_frame, text="Поиск:").pack(side=tk.LEFT)
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        search_entry.focus_set()
+
+        results = tk.Listbox(win)
+        results.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        def do_search():
+            q = search_var.get().strip()
+            results.delete(0, tk.END)
+            if len(q) < 2:
+                return
+            try:
+                import urllib.request
+                import re
+                url = "https://pypi.org/simple/"
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    html = resp.read().decode("utf-8")
+                matches = re.findall(r'href="/simple/([^/]+)/"', html)
+                seen = set()
+                count = 0
+                for m in matches:
+                    low = m.lower()
+                    if low in seen:
+                        continue
+                    seen.add(low)
+                    if q.lower() in low:
+                        results.insert(tk.END, m)
+                        count += 1
+                        if count >= 200:
+                            break
+            except Exception as e:
+                results.insert(tk.END, f"Ошибка: {e}")
+
+        ttk.Button(search_frame, text="Найти", command=do_search).pack(side=tk.LEFT)
+        search_entry.bind("<Return>", lambda _: do_search())
+
+        def on_select(_):
+            sel = results.curselection()
+            if sel:
+                self.install_var.set(results.get(sel[0]))
+                win.destroy()
+
+        results.bind("<Double-1>", on_select)
+
     def _open_pypi(self, name):
-        webbrowser.open(f"https://pypi.org/project/{name}/")
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()
 
     def _load_description(self, name):
