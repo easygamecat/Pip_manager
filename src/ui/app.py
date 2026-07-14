@@ -2,7 +2,6 @@ import logging
 import os
 import sys
 import threading
-import urllib.parse
 import webbrowser
 
 import tkinter as tk
@@ -85,20 +84,6 @@ class PipManagerApp:
         self.only_groups_var = tk.BooleanVar(value=False)
         self.only_groups_var.trace_add("write", lambda *_: self._apply_filter())
         ttk.Checkbutton(options, text="Только группы (>1 пакета)", variable=self.only_groups_var).pack(side=tk.LEFT)
-
-        install_frame = ttk.Frame(self.root)
-        install_frame.pack(fill=tk.X, padx=8, pady=(6, 0))
-        ttk.Label(install_frame, text="Установить:").pack(side=tk.LEFT)
-        self.install_var = tk.StringVar()
-        self.install_combo = ttk.Combobox(install_frame, textvariable=self.install_var)
-        self.install_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        self.install_combo.set("Введите имя пакета...")
-        self.install_combo.bind("<FocusIn>", lambda _: self._clear_install_placeholder())
-        self.install_combo.bind("<FocusOut>", lambda _: self._restore_install_placeholder())
-        ttk.Button(install_frame, text="Установить", command=self.install_selected).pack(side=tk.LEFT)
-        ttk.Button(install_frame, text="На PyPI", command=self._open_install_pypi).pack(side=tk.LEFT, padx=6)
-        self.strict_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(install_frame, text="Строгое соответствие", variable=self.strict_var).pack(side=tk.LEFT, padx=6)
 
         body = ttk.Frame(self.root)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -392,14 +377,6 @@ class PipManagerApp:
             return
         webbrowser.open(f"https://pypi.org/project/{self.current_name}/")
 
-    def _clear_install_placeholder(self):
-        if self.install_combo.get() == "Введите имя пакета...":
-            self.install_var.set("")
-
-    def _restore_install_placeholder(self):
-        if not self.install_var.get().strip():
-            self.install_var.set("Введите имя пакета...")
-
     def _open_pypi(self, name):
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()
 
@@ -520,14 +497,6 @@ class PipManagerApp:
     def update_all(self):
         names = list(self.outdated.keys())
         self._run_task("Обновление всех", names, lambda ns: pip_wrapper.update_packages(ns, self.python))
-
-    def install_selected(self):
-        spec = self.install_var.get().strip()
-        if not spec:
-            messagebox.showinfo("Установка", "Введите имя пакета для установки.")
-            return
-        self._run_task("Установка", [spec], lambda ns: pip_wrapper.install_packages(ns, self.python))
-        self.install_var.set("")
 
     def export_requirements(self):
         if not self.packages:

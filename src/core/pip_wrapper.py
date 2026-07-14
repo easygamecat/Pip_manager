@@ -58,19 +58,6 @@ def get_outdated(python=None):
     return outdated
 
 
-_pypi_service = None
-
-
-def search_pypi(query, service=None):
-    global _pypi_service
-    if service is None:
-        if _pypi_service is None:
-            from . import pypi as _pypi_module
-            _pypi_service = _pypi_module.DescriptionService()
-        service = _pypi_service
-    return service.search(query)
-
-
 def get_environment_info(python=None):
     python = python or sys.executable
     env = {
@@ -105,17 +92,6 @@ def get_environment_info(python=None):
 def family_of(name):
     idx = next((i for i, c in enumerate(name) if c.isdigit()), None)
     return name[:idx].lower() if idx is not None else name.lower()
-
-
-def install_packages(specs, python=None):
-    specs = [s for s in specs if s]
-    if not specs:
-        return False, "Не указаны пакеты для установки"
-    logger.info("Installing: %s via %s", specs, python)
-    ok, out = _run_pip(["install", *specs], python)
-    if not ok:
-        logger.error("Install failed: %s", out)
-    return ok, out
 
 
 def update_packages(names, python=None):
@@ -223,6 +199,4 @@ def find_python_interpreters():
             continue
     return found
 
-
-from . import pypi
 
