@@ -199,6 +199,8 @@ class PipManagerApp:
         missing = [n for n in names if not self.descriptions.get(n)]
         if not missing:
             return
+        if len(missing) > 50:
+            missing = missing[:50]
         self._loading_descriptions = True
         self.root.after(0, lambda: threading.Thread(
             target=self._fetch_many, args=(missing,), daemon=True

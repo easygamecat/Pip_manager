@@ -28,14 +28,27 @@ def _run_pip(args, python=None):
             [python, "-m", "pip", *args],
             capture_output=True,
             text=True,
+            timeout=30,
         )
     except FileNotFoundError as e:
         return False, f"Не удалось запустить интерпретатор: {e}"
+    except subprocess.TimeoutExpired:
+        return False, "pip завершился по таймауту"
     return result.returncode == 0, result.stdout + result.stderr
+
+
+_installed_cache = []
+_installed_ts = 0
+_INSTALLED_TTL = 300
 
 
 def get_installed_packages(python=None):
     logger.debug("get_installed_packages: python=%s", python)
+    global _installed_cache, _installed_ts
+    now = time.time()
+    if _installed_cache and now - _installed_ts < _INSTALLED_TTL:
+        return list(_installed_cache)
+
     try:
         from importlib.metadata import distributions
     except ImportError:
@@ -49,6 +62,8 @@ def get_installed_packages(python=None):
                 if name:
                     packages.append({"name": name, "version": version or ""})
             packages.sort(key=lambda p: p["name"].lower())
+            _installed_cache = packages
+            _installed_ts = now
             logger.info("Found %d packages via importlib.metadata", len(packages))
             return packages
         except Exception as e:
@@ -65,12 +80,24 @@ def get_installed_packages(python=None):
         raise RuntimeError(f"Некорректный ответ pip: {e}") from e
     packages = [{"name": pkg["name"], "version": pkg.get("version", "")} for pkg in data]
     packages.sort(key=lambda p: p["name"].lower())
+    _installed_cache = packages
+    _installed_ts = now
     logger.info("Found %d packages", len(packages))
     return packages
 
 
+_outdated_cache = {}
+_outdated_ts = 0
+_OUTDATED_TTL = 60
+
+
 def get_outdated(python=None):
     logger.debug("get_outdated: python=%s", python)
+    global _outdated_cache, _outdated_ts
+    now = time.time()
+    if _outdated_cache and now - _outdated_ts < _OUTDATED_TTL:
+        return dict(_outdated_cache)
+
     ok, output = _run_pip(["list", "--outdated", "--format=json"], python)
     if not ok:
         logger.warning("pip list --outdated failed: %s", output)
@@ -80,6 +107,8 @@ def get_outdated(python=None):
     except json.JSONDecodeError:
         return {}
     outdated = {pkg["name"]: pkg.get("latest_version", "") for pkg in data}
+    _outdated_cache = outdated
+    _outdated_ts = now
     logger.info("Found %d outdated packages", len(outdated))
     return outdated
 

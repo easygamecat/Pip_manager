@@ -45,7 +45,7 @@ class DescriptionService:
         self._request_count = 0
         self._request_lock = threading.Lock()
         self._last_request_time = 0
-        self._min_interval = 0.05
+        self._min_interval = 0.02
         self._start_popular_load()
 
     def _throttle(self):

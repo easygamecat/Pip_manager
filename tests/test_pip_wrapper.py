@@ -27,9 +27,16 @@ class TestRunPip(unittest.TestCase):
         assert ok is True
         assert "pip" in out.lower()
 
+    def test_timeout(self):
+        ok, out = pip_wrapper._run_pip(["--version"], python=sys.executable)
+        assert ok is True
+
 
 class TestGetInstalledPackages(unittest.TestCase):
     def test_returns_list_of_dicts(self):
+        import src.core.pip_wrapper as pw
+        pw._installed_cache = []
+        pw._installed_ts = 0
         pkgs = pip_wrapper.get_installed_packages()
         assert isinstance(pkgs, list)
         for pkg in pkgs:
@@ -37,11 +44,17 @@ class TestGetInstalledPackages(unittest.TestCase):
             assert "version" in pkg
 
     def test_sorted_case_insensitive(self):
+        import src.core.pip_wrapper as pw
+        pw._installed_cache = []
+        pw._installed_ts = 0
         pkgs = pip_wrapper.get_installed_packages()
         names = [p["name"] for p in pkgs]
         assert names == sorted(names, key=lambda n: n.lower())
 
     def test_no_duplicates(self):
+        import src.core.pip_wrapper as pw
+        pw._installed_cache = []
+        pw._installed_ts = 0
         pkgs = pip_wrapper.get_installed_packages()
         names = [p["name"] for p in pkgs]
         assert len(names) == len(set(names))
@@ -65,14 +78,27 @@ class TestGetInstalledPackages(unittest.TestCase):
 
 class TestGetOutdated(unittest.TestCase):
     def test_returns_dict(self):
+        import src.core.pip_wrapper as pw
+        pw._outdated_cache = {}
+        pw._outdated_ts = 0
         outdated = pip_wrapper.get_outdated()
         assert isinstance(outdated, dict)
 
     def test_values_are_strings(self):
+        import src.core.pip_wrapper as pw
+        pw._outdated_cache = {}
+        pw._outdated_ts = 0
         outdated = pip_wrapper.get_outdated()
         for name, version in outdated.items():
             assert isinstance(name, str)
             assert isinstance(version, str)
+
+    def test_cache_ttl(self):
+        import src.core.pip_wrapper as pw
+        pw._outdated_cache = {"pip": "1.0"}
+        pw._outdated_ts = time.time()
+        result = pip_wrapper.get_outdated()
+        assert result == {"pip": "1.0"}
 
 
 class TestGetEnvironmentInfo(unittest.TestCase):
