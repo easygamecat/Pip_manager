@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import urllib.parse
 import webbrowser
 
 import tkinter as tk
@@ -81,8 +82,8 @@ class PipManagerApp:
         self.install_combo = ttk.Combobox(install_frame, textvariable=self.install_var)
         self.install_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         self.install_combo.bind("<KeyRelease>", self._on_install_type)
+        self._install_after = None
         ttk.Button(install_frame, text="Установить", command=self.install_selected).pack(side=tk.LEFT)
-        ttk.Button(install_frame, text="Поиск на PyPI", command=self._search_pypi_dialog).pack(side=tk.LEFT, padx=6)
 
         body = ttk.Frame(self.root)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -174,11 +175,47 @@ class PipManagerApp:
                 self.root.after(0, lambda: self.status.set("Ошибка"))
                 return
             self.root.after(0, self._apply_filter)
-            self.root.after(0, lambda: threading.Thread(
-                target=self.fetch_descriptions, args=([p["name"] for p in self.packages],), daemon=True
-            ).start())
+            self.root.after(0, lambda: self.root.after(100, self._load_visible_descriptions))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _load_visible_descriptions(self):
+        names = self._visible_names()
+        if not names:
+            return
+        missing = [n for n in names if not self.descriptions.get(n)]
+        if not missing:
+            return
+        self.root.after(0, lambda: threading.Thread(
+            target=self._fetch_many, args=(missing,), daemon=True
+        ).start())
+
+    def _fetch_many(self, names):
+        total = len(names)
+        done = 0
+        lock = threading.Lock()
+        max_threads = 6
+        sem = threading.Semaphore(max_threads)
+
+        def worker(name):
+            nonlocal done
+            with sem:
+                self.descriptions.fetch(name)
+                with lock:
+                    done += 1
+                    current = done
+                self.root.after(0, lambda c=current: self.status.set(f"Описаний: {c}/{total}"))
+                self.root.after(0, lambda c=current: self.progress.config(value=c))
+                self.root.after(0, self._refresh_descriptions)
+
+        self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
+        threads = [threading.Thread(target=worker, args=(n,), daemon=True) for n in names]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.root.after(0, lambda: self.progress.config(value=total))
+        self.root.after(0, lambda: self.status.set(f"Пакетов: {len(self.packages)}"))
 
     def _apply_filter(self, *_):
         pattern = self.filter_var.get().strip().lower()
@@ -334,77 +371,43 @@ class PipManagerApp:
         webbrowser.open(f"https://pypi.org/project/{self.current_name}/")
 
     def _on_install_type(self, event):
+        if self._install_after:
+            self.root.after_cancel(self._install_after)
+        self._install_after = self.root.after(180, lambda: self._do_install_suggest())
+
+    def _do_install_suggest(self):
+        self._install_after = None
         query = self.install_var.get().strip()
         if len(query) < 2:
             self.install_combo["values"] = []
             return
-        matches = [p["name"] for p in self.packages if query.lower() in p["name"].lower()]
+        local = [p["name"] for p in self.packages if query.lower() in p["name"].lower()]
+        remote = []
         try:
             import urllib.request
-            url = f"https://pypi.org/pypi/{query}/json"
-            with urllib.request.urlopen(url, timeout=3) as resp:
-                import json
-                json.loads(resp.read().decode("utf-8"))
-            if query not in matches:
-                matches.insert(0, query)
+            import re
+            url = f"https://pypi.org/simple/?q={urllib.parse.quote(query)}"
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                html = resp.read().decode("utf-8")
+            matches = re.findall(r'href="/simple/([^/]+)/"', html)
+            seen = set()
+            for m in matches:
+                low = m.lower()
+                if low in seen:
+                    continue
+                seen.add(low)
+                remote.append(m)
+                if len(remote) >= 20:
+                    break
         except Exception:
             pass
-        self.install_combo["values"] = matches[:20]
-
-    def _search_pypi_dialog(self):
-        win = tk.Toplevel(self.root)
-        win.title("Поиск пакетов на PyPI")
-        win.geometry("520x420")
-        win.transient(self.root)
-
-        search_frame = ttk.Frame(win)
-        search_frame.pack(fill=tk.X, padx=8, pady=8)
-        ttk.Label(search_frame, text="Поиск:").pack(side=tk.LEFT)
-        search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_frame, textvariable=search_var)
-        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        search_entry.focus_set()
-
-        results = tk.Listbox(win)
-        results.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-
-        def do_search():
-            q = search_var.get().strip()
-            results.delete(0, tk.END)
-            if len(q) < 2:
-                return
-            try:
-                import urllib.request
-                import re
-                url = "https://pypi.org/simple/"
-                with urllib.request.urlopen(url, timeout=10) as resp:
-                    html = resp.read().decode("utf-8")
-                matches = re.findall(r'href="/simple/([^/]+)/"', html)
-                seen = set()
-                count = 0
-                for m in matches:
-                    low = m.lower()
-                    if low in seen:
-                        continue
-                    seen.add(low)
-                    if q.lower() in low:
-                        results.insert(tk.END, m)
-                        count += 1
-                        if count >= 200:
-                            break
-            except Exception as e:
-                results.insert(tk.END, f"Ошибка: {e}")
-
-        ttk.Button(search_frame, text="Найти", command=do_search).pack(side=tk.LEFT)
-        search_entry.bind("<Return>", lambda _: do_search())
-
-        def on_select(_):
-            sel = results.curselection()
-            if sel:
-                self.install_var.set(results.get(sel[0]))
-                win.destroy()
-
-        results.bind("<Double-1>", on_select)
+        merged = []
+        seen = set()
+        for m in remote + local:
+            if m.lower() not in seen:
+                seen.add(m.lower())
+                merged.append(m)
+        self.install_combo["values"] = merged[:25]
 
     def _open_pypi(self, name):
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()
