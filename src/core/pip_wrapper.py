@@ -6,8 +6,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -19,6 +17,37 @@ _PIP_VERSION_TTL = 60
 _interpreters_cache = []
 _interpreters_ts = 0
 _INTERPRETERS_TTL = 300
+
+_installed_cache = []
+_installed_ts = 0
+_INSTALLED_TTL = 300
+
+_outdated_cache = {}
+_outdated_ts = 0
+_OUTDATED_TTL = 60
+
+_CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "pip_manager"
+_INSTALLED_CACHE_FILE = _CACHE_DIR / "installed.json"
+_OUTDATED_CACHE_FILE = _CACHE_DIR / "outdated.json"
+
+
+def _load_json_cache(path, default):
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "data" in data and "ts" in data:
+                return data["data"], data["ts"]
+    except Exception:
+        pass
+    return default, 0
+
+
+def _save_json_cache(path, data, ts):
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"data": data, "ts": ts}, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _run_pip(args, python=None):
@@ -64,10 +93,18 @@ def get_installed_packages(python=None):
             packages.sort(key=lambda p: p["name"].lower())
             _installed_cache = packages
             _installed_ts = now
+            _save_json_cache(_INSTALLED_CACHE_FILE, packages, now)
             logger.info("Found %d packages via importlib.metadata", len(packages))
             return packages
         except Exception as e:
             logger.debug("importlib.metadata fallback failed: %s", e)
+
+    disk_data, disk_ts = _load_json_cache(_INSTALLED_CACHE_FILE, None)
+    if disk_data and now - disk_ts < _INSTALLED_TTL:
+        _installed_cache = disk_data
+        _installed_ts = disk_ts
+        logger.info("Loaded %d packages from disk cache", len(disk_data))
+        return list(disk_data)
 
     ok, output = _run_pip(["list", "--format=json"], python)
     if not ok:
@@ -82,6 +119,7 @@ def get_installed_packages(python=None):
     packages.sort(key=lambda p: p["name"].lower())
     _installed_cache = packages
     _installed_ts = now
+    _save_json_cache(_INSTALLED_CACHE_FILE, packages, now)
     logger.info("Found %d packages", len(packages))
     return packages
 
@@ -98,6 +136,13 @@ def get_outdated(python=None):
     if _outdated_cache and now - _outdated_ts < _OUTDATED_TTL:
         return dict(_outdated_cache)
 
+    disk_data, disk_ts = _load_json_cache(_OUTDATED_CACHE_FILE, None)
+    if disk_data and now - disk_ts < _OUTDATED_TTL:
+        _outdated_cache = disk_data
+        _outdated_ts = disk_ts
+        logger.info("Loaded %d outdated packages from disk cache", len(disk_data))
+        return dict(disk_data)
+
     ok, output = _run_pip(["list", "--outdated", "--format=json"], python)
     if not ok:
         logger.warning("pip list --outdated failed: %s", output)
@@ -109,6 +154,7 @@ def get_outdated(python=None):
     outdated = {pkg["name"]: pkg.get("latest_version", "") for pkg in data}
     _outdated_cache = outdated
     _outdated_ts = now
+    _save_json_cache(_OUTDATED_CACHE_FILE, outdated, now)
     logger.info("Found %d outdated packages", len(outdated))
     return outdated
 
