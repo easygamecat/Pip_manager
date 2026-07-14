@@ -80,12 +80,12 @@ class PipManagerApp:
         options = ttk.Frame(self.root)
         options.pack(fill=tk.X, padx=8)
         self.filter_var = tk.StringVar()
-        self.filter_var.trace_add("write", lambda *_: self._apply_filter())
+        self.filter_var.trace_add("write", lambda *_: self._on_filter_changed())
         ttk.Label(options, text="Поиск:").pack(side=tk.LEFT)
         ttk.Entry(options, textvariable=self.filter_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
 
         self.only_groups_var = tk.BooleanVar(value=False)
-        self.only_groups_var.trace_add("write", lambda *_: self._apply_filter())
+        self.only_groups_var.trace_add("write", lambda *_: self._on_filter_changed())
         ttk.Checkbutton(options, text="Только группы (>1 пакета)", variable=self.only_groups_var).pack(side=tk.LEFT)
 
         body = ttk.Frame(self.root)
@@ -104,6 +104,7 @@ class PipManagerApp:
         self.tree.column("version", width=90, stretch=False)
         self.tree.column("desc", stretch=True)
         self.tree.tag_configure("outdated", foreground="#c00000")
+        self.tree.tag_configure("group_highlight", background="#d0f0ff")
         self._last_sort_column = None
         self._last_sort_reverse = False
 
@@ -210,8 +211,8 @@ class PipManagerApp:
                 return
             done = 0
             lock = threading.Lock()
-            max_workers = 8
-            batch_size = 10
+            max_workers = pypi._DEFAULT_WORKERS
+            batch_size = max(10, total // 10)
 
             def worker(name):
                 nonlocal done
@@ -237,6 +238,10 @@ class PipManagerApp:
             self.root.after(0, self._refresh_descriptions)
         finally:
             self._loading_descriptions = False
+
+    def _on_filter_changed(self):
+        self._apply_filter()
+        self.root.after(100, self._load_visible_descriptions)
 
     def _apply_filter(self, *_):
         pattern = self.filter_var.get().strip().lower()
@@ -317,11 +322,24 @@ class PipManagerApp:
             return
         label = self.group_list.get(sel[0])
         fam = label.rsplit(" (", 1)[0]
-        names = [self.tree.item(iid, "values")[1] for iid in self.family_iids.get(fam, [])]
+        iids = self.family_iids.get(fam, [])
+        names = [self.tree.item(iid, "values")[1] for iid in iids]
         self.checked.update(names)
         self._render_checks()
+        for iid in iids:
+            self.tree.item(iid, tags=("group_highlight",))
         if names:
             self.tree.see(self.name_to_iid[names[0]])
+        self.root.after(600, lambda: self._clear_group_highlight(iids))
+
+    def _clear_group_highlight(self, iids):
+        for iid in iids:
+            current_tags = self.tree.item(iid, "tags")
+            new_tags = tuple(t for t in current_tags if t != "group_highlight")
+            name = self.tree.item(iid, "values")[1]
+            if name in self.outdated and self.outdated[name]:
+                new_tags = new_tags + ("outdated",)
+            self.tree.item(iid, tags=new_tags)
 
     def _render_checks(self):
         for iid in self.tree.get_children():

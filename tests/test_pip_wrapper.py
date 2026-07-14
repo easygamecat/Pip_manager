@@ -258,6 +258,14 @@ class TestDescriptionService(unittest.TestCase):
         elapsed = time.time() - start
         assert elapsed >= 0.2
 
+    def test_default_workers(self):
+        assert pypi._DEFAULT_WORKERS >= 4
+        assert pypi._DEFAULT_WORKERS <= 32
+
+    def test_get_cpu_count(self):
+        cpu = pypi._get_cpu_count()
+        assert cpu >= 1
+
     def test_thread_safety(self):
         svc = pypi.DescriptionService()
         errors = []

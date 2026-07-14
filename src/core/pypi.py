@@ -1,5 +1,7 @@
 import json
 import logging
+import math
+import os
 import re
 import threading
 import time
@@ -14,6 +16,21 @@ PYPI_SIMPLE = "https://pypi.org/simple/"
 
 _pypi_opener = urllib.request.build_opener(urllib.request.HTTPHandler())
 _pypi_opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+
+def _get_cpu_count():
+    try:
+        return os.cpu_count() or 2
+    except Exception:
+        return 2
+
+
+def _get_default_workers():
+    cpu = _get_cpu_count()
+    return max(4, min(32, cpu * 4))
+
+
+_DEFAULT_WORKERS = _get_default_workers()
 
 
 class DescriptionService:
@@ -165,7 +182,9 @@ class DescriptionService:
                 self._search_cache[qlow] = result
         return result
 
-    def fetch_many(self, names, max_workers=8):
+    def fetch_many(self, names, max_workers=None):
+        if max_workers is None:
+            max_workers = _DEFAULT_WORKERS
         results = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_name = {executor.submit(self.fetch, name): name for name in names}
