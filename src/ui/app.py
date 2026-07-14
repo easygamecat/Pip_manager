@@ -40,11 +40,18 @@ class PipManagerApp:
         env_frame = ttk.Frame(self.root)
         env_frame.pack(fill=tk.X, padx=8, pady=(8, 0))
 
-        ttk.Label(env_frame, text=env_text, foreground="#555").pack(side=tk.LEFT)
+        ttk.Label(env_frame, text="Pip Manager", font=(None, 12, "bold")).pack(side=tk.LEFT)
+        ttk.Label(env_frame, text=env_text, foreground="#555").pack(side=tk.LEFT, padx=(8, 0))
 
         ttk.Label(env_frame, text="Окружение:").pack(side=tk.LEFT, padx=(12, 0))
         self.python_var = tk.StringVar(value=self.python)
         self.python_combo = ttk.Combobox(env_frame, textvariable=self.python_var, width=50, state="readonly")
+        interpreters = pip_wrapper.find_python_interpreters()
+        self.python_combo["values"] = interpreters
+        if interpreters:
+            if self.python not in interpreters:
+                self.python = interpreters[0]
+            self.python_var.set(self.python)
         self.python_combo.pack(side=tk.LEFT, padx=6)
         self.python_combo.bind("<<ComboboxSelected>>", lambda _: self._on_python_changed())
         ttk.Button(env_frame, text="Обновить окружение", command=self._reload_pythons).pack(side=tk.LEFT, padx=6)
@@ -169,15 +176,22 @@ class PipManagerApp:
         def work():
             try:
                 self.packages = pip_wrapper.get_installed_packages(self.python)
-                self.outdated = pip_wrapper.get_outdated(self.python)
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
                 self.root.after(0, lambda: self.status.set("Ошибка"))
                 return
             self.root.after(0, self._apply_filter)
-            self.root.after(0, lambda: self.root.after(100, self._load_visible_descriptions))
+            self.root.after(0, lambda: self.root.after(50, self._load_visible_descriptions))
+            self.root.after(0, lambda: threading.Thread(target=self._load_outdated, daemon=True).start())
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _load_outdated(self):
+        try:
+            self.outdated = pip_wrapper.get_outdated(self.python)
+        except Exception:
+            self.outdated = {}
+        self.root.after(0, self._apply_filter)
 
     def _load_visible_descriptions(self):
         names = self._visible_names()
@@ -373,7 +387,7 @@ class PipManagerApp:
     def _on_install_type(self, event):
         if self._install_after:
             self.root.after_cancel(self._install_after)
-        self._install_after = self.root.after(180, lambda: self._do_install_suggest())
+        self._install_after = self.root.after(300, lambda: self._do_install_suggest())
 
     def _do_install_suggest(self):
         self._install_after = None
@@ -382,25 +396,7 @@ class PipManagerApp:
             self.install_combo["values"] = []
             return
         local = [p["name"] for p in self.packages if query.lower() in p["name"].lower()]
-        remote = []
-        try:
-            import urllib.request
-            import re
-            url = f"https://pypi.org/simple/?q={urllib.parse.quote(query)}"
-            with urllib.request.urlopen(url, timeout=6) as resp:
-                html = resp.read().decode("utf-8")
-            matches = re.findall(r'href="/simple/([^/]+)/"', html)
-            seen = set()
-            for m in matches:
-                low = m.lower()
-                if low in seen:
-                    continue
-                seen.add(low)
-                remote.append(m)
-                if len(remote) >= 20:
-                    break
-        except Exception:
-            pass
+        remote = pip_wrapper.search_pypi(query)
         merged = []
         seen = set()
         for m in remote + local:

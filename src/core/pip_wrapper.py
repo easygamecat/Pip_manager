@@ -1,8 +1,11 @@
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 import winreg
 from pathlib import Path
 
@@ -42,6 +45,31 @@ def get_outdated(python=None):
     except json.JSONDecodeError:
         return {}
     return {pkg["name"]: pkg.get("latest_version", "") for pkg in data}
+
+
+def search_pypi(query):
+    query = (query or "").strip()
+    if len(query) < 2:
+        return []
+    try:
+        url = f"https://pypi.org/simple/?q={urllib.parse.quote(query)}"
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            html = resp.read().decode("utf-8")
+        matches = re.findall(r'href="/simple/([^/]+)/"', html)
+        seen = set()
+        out = []
+        for m in matches:
+            low = m.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            if query.lower() in low:
+                out.append(m)
+                if len(out) >= 30:
+                    break
+        return out
+    except Exception:
+        return []
 
 
 def get_environment_info(python=None):
