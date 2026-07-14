@@ -29,6 +29,7 @@ class PipManagerApp:
         self.checked = set()
         self._click_timer = None
         self.python = sys.executable
+        self._loading_descriptions = False
 
         self._build_ui()
         self.refresh()
@@ -187,44 +188,52 @@ class PipManagerApp:
         self.root.after(0, self._apply_filter)
 
     def _load_visible_descriptions(self):
+        if getattr(self, "_loading_descriptions", False):
+            return
         names = self._visible_names()
         if not names:
             return
         missing = [n for n in names if not self.descriptions.get(n)]
         if not missing:
             return
+        self._loading_descriptions = True
         self.root.after(0, lambda: threading.Thread(
             target=self._fetch_many, args=(missing,), daemon=True
         ).start())
 
     def _fetch_many(self, names):
-        total = len(names)
-        done = 0
-        lock = threading.Lock()
-        max_threads = 6
-        sem = threading.Semaphore(max_threads)
+        try:
+            total = len(names)
+            if total == 0:
+                return
+            done = 0
+            lock = threading.Lock()
+            max_threads = 3
+            sem = threading.Semaphore(max_threads)
 
-        def worker(name):
-            nonlocal done
-            with sem:
-                self.descriptions.fetch(name)
-                with lock:
-                    done += 1
-                    current = done
-                self.root.after(0, lambda c=current: self.status.set(f"Описаний: {c}/{total}"))
-                self.root.after(0, lambda c=current: self.progress.config(value=c))
-                if current % 8 == 0 or current == total:
-                    self.root.after(0, self._refresh_descriptions)
+            def worker(name):
+                nonlocal done
+                with sem:
+                    self.descriptions.fetch(name)
+                    with lock:
+                        done += 1
+                        current = done
+                    self.root.after(0, lambda c=current: self.status.set(f"Описаний: {c}/{total}"))
+                    self.root.after(0, lambda c=current: self.progress.config(value=c))
+                    if current % 10 == 0 or current == total:
+                        self.root.after(0, self._refresh_descriptions)
 
-        self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
-        threads = [threading.Thread(target=worker, args=(n,), daemon=True) for n in names]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        self.root.after(0, lambda: self.progress.config(value=total))
-        self.root.after(0, lambda: self.status.set(f"Пакетов: {len(self.packages)}"))
-        self.root.after(0, self._refresh_descriptions)
+            self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
+            threads = [threading.Thread(target=worker, args=(n,), daemon=True) for n in names]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.root.after(0, lambda: self.progress.config(value=total))
+            self.root.after(0, lambda: self.status.set(f"Пакетов: {len(self.packages)}"))
+            self.root.after(0, self._refresh_descriptions)
+        finally:
+            self._loading_descriptions = False
 
     def _apply_filter(self, *_):
         pattern = self.filter_var.get().strip().lower()

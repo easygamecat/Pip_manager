@@ -151,42 +151,6 @@ def find_python_interpreters():
                         add(candidate)
     except Exception:
         pass
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Python\PythonCore")
-        for i in range(winreg.QueryInfoKey(key)[0]):
-            try:
-                name = winreg.EnumKey(key, i)
-                sub = winreg.OpenKey(key, f"{name}\\InstallPath")
-                try:
-                    candidate = os.path.join(winreg.QueryValueEx(sub, "")[0], "python.exe")
-                    add(candidate)
-                except FileNotFoundError:
-                    pass
-                finally:
-                    winreg.CloseKey(sub)
-            except OSError:
-                break
-        winreg.CloseKey(key)
-    except OSError:
-        pass
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"SOFTWARE\Python\PythonCore")
-        for i in range(winreg.QueryInfoKey(key)[0]):
-            try:
-                name = winreg.EnumKey(key, i)
-                sub = winreg.OpenKey(key, f"{name}\\InstallPath")
-                try:
-                    candidate = os.path.join(winreg.QueryValueEx(sub, "")[0], "python.exe")
-                    add(candidate)
-                except FileNotFoundError:
-                    pass
-                finally:
-                    winreg.CloseKey(sub)
-            except OSError:
-                break
-        winreg.CloseKey(key)
-    except OSError:
-        pass
     env_path = os.environ.get("PATH", "")
     for part in env_path.split(os.pathsep):
         if not part:
