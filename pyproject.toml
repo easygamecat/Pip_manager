@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pip-manager-gui"
+version = "0.1.0"
+description = "Графическая утилита для управления pip-пакетами (Tkinter)"
+readme = "README.md"
+requires-python = ">=3.6"
+license = { text = "Apache-2.0" }
+authors = [{ name = "easygamecat" }]
+keywords = ["pip", "tkinter", "gui", "package-manager"]
+
+[project.scripts]
+pip-manager = "src.main:main"
+
+[tool.setuptools]
+packages = ["src", "src.core", "src.ui"]
