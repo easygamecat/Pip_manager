@@ -70,6 +70,7 @@ class PipManagerApp:
         ttk.Label(toolbar, textvariable=self.status).pack(side=tk.RIGHT)
         self.progress = ttk.Progressbar(toolbar, mode="determinate", length=140)
         self.progress.pack(side=tk.RIGHT, padx=8)
+        ttk.Button(toolbar, text="Лог", command=self._open_log).pack(side=tk.RIGHT, padx=6)
 
         options = ttk.Frame(self.root)
         options.pack(fill=tk.X, padx=8)
@@ -400,7 +401,7 @@ class PipManagerApp:
     def _on_install_type(self, event):
         if self._install_after:
             self.root.after_cancel(self._install_after)
-        self._install_after = self.root.after(400, lambda: self._do_install_suggest())
+        self._install_after = self.root.after(350, lambda: self._do_install_suggest())
 
     def _do_install_suggest(self):
         self._install_after = None
@@ -411,16 +412,22 @@ class PipManagerApp:
         if len(query) < 2:
             self.install_combo["values"] = []
             return
-        local = [p["name"] for p in self.packages if self._match(query, p["name"])]
-        remote = pip_wrapper.search_pypi(query)
-        remote_filtered = [r for r in remote if self._match(query, r)]
-        merged = []
-        seen = set()
-        for m in remote_filtered + local:
-            if m.lower() not in seen:
-                seen.add(m.lower())
-                merged.append(m)
-        self.install_combo["values"] = merged[:25]
+        self._search_id = getattr(self, "_search_id", 0) + 1
+        search_id = self._search_id
+        self.install_combo["values"] = ["Поиск..."]
+        def work():
+            local = [p["name"] for p in self.packages if self._match(query, p["name"])]
+            remote = pip_wrapper.search_pypi(query)
+            remote_filtered = [r for r in remote if self._match(query, r)]
+            merged = []
+            seen = set()
+            for m in remote_filtered + local:
+                if m.lower() not in seen:
+                    seen.add(m.lower())
+                    merged.append(m)
+            if search_id == self._search_id:
+                self.root.after(0, lambda: self.install_combo.configure(values=merged[:25] if merged else ["Ничего не найдено"]))
+        threading.Thread(target=work, daemon=True).start()
 
     def _match(self, query, name):
         if self.strict_var.get():
@@ -572,6 +579,16 @@ class PipManagerApp:
             messagebox.showinfo("Экспорт", f"requirements.txt сохранён:\n{out}")
         else:
             messagebox.showerror("Ошибка", str(out))
+
+    def _open_log(self):
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pip_manager.log")
+        if not os.path.exists(log_path):
+            messagebox.showinfo("Лог", "Файл лога ещё не создан.")
+            return
+        try:
+            os.startfile(log_path)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть лог:\n{e}")
 
     def _on_done(self, ok, output, title):
         if ok:

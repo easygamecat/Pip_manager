@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import platform
 import re
@@ -8,6 +9,8 @@ import urllib.parse
 import urllib.request
 import winreg
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _run_pip(args, python=None):
@@ -24,27 +27,35 @@ def _run_pip(args, python=None):
 
 
 def get_installed_packages(python=None):
+    logger.debug("get_installed_packages: python=%s", python)
     ok, output = _run_pip(["list", "--format=json"], python)
     if not ok:
+        logger.error("pip list failed: %s", output)
         raise RuntimeError(output or "pip list завершился с ошибкой")
     try:
         data = json.loads(output)
     except json.JSONDecodeError as e:
+        logger.error("pip list json decode failed: %s", e)
         raise RuntimeError(f"Некорректный ответ pip: {e}") from e
     packages = [{"name": pkg["name"], "version": pkg.get("version", "")} for pkg in data]
     packages.sort(key=lambda p: p["name"].lower())
+    logger.info("Found %d packages", len(packages))
     return packages
 
 
 def get_outdated(python=None):
+    logger.debug("get_outdated: python=%s", python)
     ok, output = _run_pip(["list", "--outdated", "--format=json"], python)
     if not ok:
+        logger.warning("pip list --outdated failed: %s", output)
         return {}
     try:
         data = json.loads(output)
     except json.JSONDecodeError:
         return {}
-    return {pkg["name"]: pkg.get("latest_version", "") for pkg in data}
+    outdated = {pkg["name"]: pkg.get("latest_version", "") for pkg in data}
+    logger.info("Found %d outdated packages", len(outdated))
+    return outdated
 
 
 def search_pypi(query):
@@ -92,21 +103,33 @@ def install_packages(specs, python=None):
     specs = [s for s in specs if s]
     if not specs:
         return False, "Не указаны пакеты для установки"
-    return _run_pip(["install", *specs], python)
+    logger.info("Installing: %s via %s", specs, python)
+    ok, out = _run_pip(["install", *specs], python)
+    if not ok:
+        logger.error("Install failed: %s", out)
+    return ok, out
 
 
 def update_packages(names, python=None):
     names = [n for n in names if n]
     if not names:
         return False, "Не указаны пакеты для обновления"
-    return _run_pip(["install", "--upgrade", *names], python)
+    logger.info("Upgrading: %s via %s", names, python)
+    ok, out = _run_pip(["install", "--upgrade", *names], python)
+    if not ok:
+        logger.error("Upgrade failed: %s", out)
+    return ok, out
 
 
 def uninstall_packages(names, python=None):
     names = [n for n in names if n]
     if not names:
         return False, "Не указаны пакеты для удаления"
-    return _run_pip(["uninstall", "-y", *names], python)
+    logger.info("Uninstalling: %s via %s", names, python)
+    ok, out = _run_pip(["uninstall", "-y", *names], python)
+    if not ok:
+        logger.error("Uninstall failed: %s", out)
+    return ok, out
 
 
 def export_requirements(packages, path):
