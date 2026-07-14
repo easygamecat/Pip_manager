@@ -46,6 +46,22 @@ class TestGetInstalledPackages(unittest.TestCase):
         names = [p["name"] for p in pkgs]
         assert len(names) == len(set(names))
 
+    def test_importlib_metadata_fallback(self):
+        import src.core.pip_wrapper as pw
+        original = pw.get_installed_packages
+        call_count = [0]
+
+        def fake_get_installed(python=None):
+            call_count[0] += 1
+            return [{"name": "fake", "version": "1.0"}]
+
+        pw.get_installed_packages = fake_get_installed
+        try:
+            pkgs = pip_wrapper.get_installed_packages()
+            assert pkgs == [{"name": "fake", "version": "1.0"}]
+        finally:
+            pw.get_installed_packages = original
+
 
 class TestGetOutdated(unittest.TestCase):
     def test_returns_dict(self):
@@ -149,6 +165,19 @@ class TestFindPythonInterpreters(unittest.TestCase):
         for interp in interpreters:
             assert os.path.isfile(interp)
 
+    def test_cache_ttl(self):
+        import src.core.pip_wrapper as pw
+        old_cache = pw._interpreters_cache
+        old_ts = pw._interpreters_ts
+        pw._interpreters_cache = ["C:\\fake\\python.exe"]
+        pw._interpreters_ts = time.time()
+        try:
+            result = pip_wrapper.find_python_interpreters()
+            assert result == ["C:\\fake\\python.exe"]
+        finally:
+            pw._interpreters_cache = old_cache
+            pw._interpreters_ts = old_ts
+
 
 class TestDescriptionService(unittest.TestCase):
     def test_get_cache_miss(self):
@@ -212,6 +241,22 @@ class TestDescriptionService(unittest.TestCase):
             svc = pypi.DescriptionService()
             assert svc._popular_loaded.wait(timeout=5)
             assert len(svc._popular_cache) > 0
+
+    def test_fetch_many(self):
+        svc = pypi.DescriptionService()
+        results = svc.fetch_many(["pip", "pytest"], max_workers=2)
+        assert "pip" in results
+        assert "pytest" in results
+        assert isinstance(results["pip"], str)
+
+    def test_throttle_limits_requests(self):
+        svc = pypi.DescriptionService()
+        svc._min_interval = 0.1
+        start = time.time()
+        for _ in range(3):
+            svc._throttle()
+        elapsed = time.time() - start
+        assert elapsed >= 0.2
 
     def test_thread_safety(self):
         svc = pypi.DescriptionService()

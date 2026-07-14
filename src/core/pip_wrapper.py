@@ -5,12 +5,20 @@ import platform
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
-import winreg
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_pip_version_cache = None
+_pip_version_ts = 0
+_PIP_VERSION_TTL = 60
+
+_interpreters_cache = []
+_interpreters_ts = 0
+_INTERPRETERS_TTL = 300
 
 
 def _run_pip(args, python=None):
@@ -28,6 +36,24 @@ def _run_pip(args, python=None):
 
 def get_installed_packages(python=None):
     logger.debug("get_installed_packages: python=%s", python)
+    try:
+        from importlib.metadata import distributions
+    except ImportError:
+        pass
+    else:
+        try:
+            packages = []
+            for dist in distributions():
+                name = dist.metadata["Name"]
+                version = dist.metadata["Version"]
+                if name:
+                    packages.append({"name": name, "version": version or ""})
+            packages.sort(key=lambda p: p["name"].lower())
+            logger.info("Found %d packages via importlib.metadata", len(packages))
+            return packages
+        except Exception as e:
+            logger.debug("importlib.metadata fallback failed: %s", e)
+
     ok, output = _run_pip(["list", "--format=json"], python)
     if not ok:
         logger.error("pip list failed: %s", output)
@@ -65,20 +91,35 @@ def get_environment_info(python=None):
         "prefix": sys.prefix,
         "base_prefix": sys.base_prefix,
     }
-    ok, output = _run_pip(["--version"], python)
-    if ok:
-        first = output.strip().splitlines()[0] if output.strip() else ""
-        if first.lower().startswith("python"):
-            env["version"] = first.split(" ", 1)[1].strip()
-        else:
-            env["version"] = platform.python_version()
-    else:
-        env["version"] = platform.python_version()
+    global _pip_version_cache, _pip_version_ts
+    now = time.time()
+    if _pip_version_cache is None or now - _pip_version_ts > _PIP_VERSION_TTL:
+        try:
+            result = subprocess.run(
+                [python, "-m", "pip", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                first = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+                if first.lower().startswith("python"):
+                    _pip_version_cache = first.split(" ", 1)[1].strip()
+                else:
+                    _pip_version_cache = platform.python_version()
+            else:
+                _pip_version_cache = platform.python_version()
+        except Exception:
+            _pip_version_cache = platform.python_version()
+        _pip_version_ts = now
+    env["version"] = _pip_version_cache
     is_venv = False
     try:
         info = subprocess.run(
             [python, "-c", "import sys; print(sys.prefix); print(sys.base_prefix)"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         lines = info.stdout.strip().splitlines()
         if len(lines) == 2:
@@ -124,6 +165,11 @@ def export_requirements(packages, path):
 
 
 def find_python_interpreters():
+    global _interpreters_cache, _interpreters_ts
+    now = time.time()
+    if _interpreters_cache and now - _interpreters_ts < _INTERPRETERS_TTL:
+        return list(_interpreters_cache)
+
     found = []
     seen = set()
 
@@ -161,6 +207,7 @@ def find_python_interpreters():
                     add(os.path.join(part, name))
         except OSError:
             continue
-    return found
 
-
+    _interpreters_cache = found
+    _interpreters_ts = now
+    return list(found)

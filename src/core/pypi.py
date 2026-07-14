@@ -2,8 +2,10 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +25,27 @@ class DescriptionService:
         self._search_lock = threading.Lock()
         self._popular_cache = []
         self._popular_loaded = threading.Event()
+        self._request_count = 0
+        self._request_lock = threading.Lock()
+        self._last_request_time = 0
+        self._min_interval = 0.05
         self._start_popular_load()
+
+    def _throttle(self):
+        with self._request_lock:
+            now = time.time()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_request_time = time.time()
+            self._request_count += 1
 
     def _start_popular_load(self):
         def load():
             try:
+                self._throttle()
                 req = urllib.request.Request(PYPI_SIMPLE, headers={"User-Agent": "Mozilla/5.0"})
-                with _pypi_opener.open(req, timeout=10) as resp:
+                with _pypi_opener.open(req, timeout=15) as resp:
                     html = resp.read().decode("utf-8", errors="ignore")
                 matches = re.findall(r'href="/simple/([^/]+)/"', html)
                 seen = set()
@@ -59,8 +75,9 @@ class DescriptionService:
             if name in self._cache:
                 return self._cache[name]
         try:
+            self._throttle()
             req = urllib.request.Request(PYPI_URL.format(name), headers={"User-Agent": "Mozilla/5.0"})
-            with _pypi_opener.open(req, timeout=8) as resp:
+            with _pypi_opener.open(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             summary = (data.get("info", {}) or {}).get("summary", "") or ""
         except Exception:
@@ -82,8 +99,9 @@ class DescriptionService:
             if cached is not None:
                 return cached
         try:
+            self._throttle()
             req = urllib.request.Request(PYPI_URL.format(name), headers={"User-Agent": "Mozilla/5.0"})
-            with _pypi_opener.open(req, timeout=8) as resp:
+            with _pypi_opener.open(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             info = data.get("info", {}) or {}
             result = {
@@ -112,8 +130,9 @@ class DescriptionService:
                 return cached
         result = []
         try:
+            self._throttle()
             req = urllib.request.Request(f"https://pypi.org/simple/?q={urllib.parse.quote(query)}", headers={"User-Agent": "Mozilla/5.0"})
-            with _pypi_opener.open(req, timeout=8) as resp:
+            with _pypi_opener.open(req, timeout=10) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
             matches = re.findall(r'href="/simple/([^/]+)/"', html)
             seen = set()
@@ -145,3 +164,15 @@ class DescriptionService:
             with self._search_lock:
                 self._search_cache[qlow] = result
         return result
+
+    def fetch_many(self, names, max_workers=8):
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_name = {executor.submit(self.fetch, name): name for name in names}
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    results[name] = future.result()
+                except Exception:
+                    results[name] = ""
+        return results

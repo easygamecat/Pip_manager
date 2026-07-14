@@ -2,7 +2,9 @@ import logging
 import os
 import sys
 import threading
+import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -208,27 +210,28 @@ class PipManagerApp:
                 return
             done = 0
             lock = threading.Lock()
-            max_threads = 3
-            sem = threading.Semaphore(max_threads)
+            max_workers = 8
+            batch_size = 10
 
             def worker(name):
                 nonlocal done
-                with sem:
+                try:
                     self.descriptions.fetch(name)
-                    with lock:
-                        done += 1
-                        current = done
-                    self.root.after(0, lambda c=current: self.status.set(f"Описаний: {c}/{total}"))
-                    self.root.after(0, lambda c=current: self.progress.config(value=c))
-                    if current % 10 == 0 or current == total:
-                        self.root.after(0, self._refresh_descriptions)
+                except Exception:
+                    pass
+                with lock:
+                    done += 1
+                    current = done
+                self.root.after(0, lambda c=current: self.status.set(f"Описаний: {c}/{total}"))
+                self.root.after(0, lambda c=current: self.progress.config(value=c))
+                if current % batch_size == 0 or current == total:
+                    self.root.after(0, self._refresh_descriptions)
 
             self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
-            threads = [threading.Thread(target=worker, args=(n,), daemon=True) for n in names]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(worker, name): name for name in names}
+                for future in as_completed(futures):
+                    future.result()
             self.root.after(0, lambda: self.progress.config(value=total))
             self.root.after(0, lambda: self.status.set(f"Пакетов: {len(self.packages)}"))
             self.root.after(0, self._refresh_descriptions)
@@ -387,6 +390,7 @@ class PipManagerApp:
         if not self.current_name:
             return
         webbrowser.open(f"https://pypi.org/project/{self.current_name}/")
+
 
     def _open_pypi(self, name):
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()
