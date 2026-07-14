@@ -48,28 +48,8 @@ def get_outdated(python=None):
 
 
 def search_pypi(query):
-    query = (query or "").strip()
-    if len(query) < 2:
-        return []
-    try:
-        url = f"https://pypi.org/simple/?q={urllib.parse.quote(query)}"
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            html = resp.read().decode("utf-8")
-        matches = re.findall(r'href="/simple/([^/]+)/"', html)
-        seen = set()
-        out = []
-        for m in matches:
-            low = m.lower()
-            if low in seen:
-                continue
-            seen.add(low)
-            if query.lower() in low:
-                out.append(m)
-                if len(out) >= 30:
-                    break
-        return out
-    except Exception:
-        return []
+    svc = pypi.DescriptionService()
+    return svc.search(query)
 
 
 def get_environment_info(python=None):
@@ -211,4 +191,7 @@ def find_python_interpreters():
         except OSError:
             continue
     return found
+
+
+from . import pypi
 

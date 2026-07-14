@@ -88,9 +88,14 @@ class PipManagerApp:
         self.install_var = tk.StringVar()
         self.install_combo = ttk.Combobox(install_frame, textvariable=self.install_var)
         self.install_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self.install_combo.set("Введите имя пакета...")
+        self.install_combo.bind("<FocusIn>", lambda _: self._clear_install_placeholder())
+        self.install_combo.bind("<FocusOut>", lambda _: self._restore_install_placeholder())
         self.install_combo.bind("<KeyRelease>", self._on_install_type)
         self._install_after = None
         ttk.Button(install_frame, text="Установить", command=self.install_selected).pack(side=tk.LEFT)
+        self.strict_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(install_frame, text="Строгое соответствие", variable=self.strict_var).pack(side=tk.LEFT, padx=6)
 
         body = ttk.Frame(self.root)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -384,26 +389,43 @@ class PipManagerApp:
             return
         webbrowser.open(f"https://pypi.org/project/{self.current_name}/")
 
+    def _clear_install_placeholder(self):
+        if self.install_combo.get() == "Введите имя пакета...":
+            self.install_var.set("")
+
+    def _restore_install_placeholder(self):
+        if not self.install_var.get().strip():
+            self.install_var.set("Введите имя пакета...")
+
     def _on_install_type(self, event):
         if self._install_after:
             self.root.after_cancel(self._install_after)
-        self._install_after = self.root.after(300, lambda: self._do_install_suggest())
+        self._install_after = self.root.after(400, lambda: self._do_install_suggest())
 
     def _do_install_suggest(self):
         self._install_after = None
         query = self.install_var.get().strip()
+        if not query or query == "Введите имя пакета...":
+            self.install_combo["values"] = []
+            return
         if len(query) < 2:
             self.install_combo["values"] = []
             return
-        local = [p["name"] for p in self.packages if query.lower() in p["name"].lower()]
+        local = [p["name"] for p in self.packages if self._match(query, p["name"])]
         remote = pip_wrapper.search_pypi(query)
+        remote_filtered = [r for r in remote if self._match(query, r)]
         merged = []
         seen = set()
-        for m in remote + local:
+        for m in remote_filtered + local:
             if m.lower() not in seen:
                 seen.add(m.lower())
                 merged.append(m)
         self.install_combo["values"] = merged[:25]
+
+    def _match(self, query, name):
+        if self.strict_var.get():
+            return query == name
+        return query.lower() in name.lower()
 
     def _open_pypi(self, name):
         threading.Thread(target=self._load_description, args=(name,), daemon=True).start()

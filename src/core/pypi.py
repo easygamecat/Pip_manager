@@ -1,5 +1,7 @@
 import json
+import re
 import threading
+import urllib.parse
 import urllib.request
 
 PYPI_URL = "https://pypi.org/pypi/{}/json"
@@ -10,6 +12,8 @@ class DescriptionService:
         self._cache = {}
         self._full_cache = {}
         self._lock = threading.Lock()
+        self._search_cache = {}
+        self._search_lock = threading.Lock()
 
     def get(self, name):
         with self._lock:
@@ -57,4 +61,31 @@ class DescriptionService:
             result = {"summary": "", "description": "", "home_page": "", "license": "", "requires_dist": [], "project_urls": {}}
         with self._lock:
             self._full_cache[name + "__info"] = result
+        return result
+
+    def search(self, query):
+        with self._search_lock:
+            cached = self._search_cache.get(query)
+            if cached is not None:
+                return cached
+        result = []
+        try:
+            url = f"https://pypi.org/simple/?q={urllib.parse.quote(query)}"
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                html = resp.read().decode("utf-8")
+            matches = re.findall(r'href="/simple/([^/]+)/"', html)
+            seen = set()
+            for m in matches:
+                low = m.lower()
+                if low in seen:
+                    continue
+                seen.add(low)
+                if query.lower() in low:
+                    result.append(m)
+                    if len(result) >= 30:
+                        break
+        except Exception:
+            pass
+        with self._search_lock:
+            self._search_cache[query] = result
         return result
